@@ -1,5 +1,9 @@
 from django.core.files.storage import Storage
 from django.core.files.base import ContentFile
+from django.utils.encoding import filepath_to_uri
+from django.conf import settings
+import urlparse
+import os
 
 class PathDoesNotExist(Exception):
     pass
@@ -8,27 +12,36 @@ class InMemoryNode(object):
     """
     Base class for files and directories.
     """
+    name = None
     parent = None
 
     def add_child(self, name, child):
         child.parent = self
         self.children[name] = child
 
+    @property
+    def path(self):
+        if self.parent is None:
+           return ''
+        return os.path.join(self.parent.path, self.name)
+
 class InMemoryFile(InMemoryNode):
     """
     Stores contents of file and stores reference to parent.
     """
-    def __init__(self, contents='', parent=None):
+    def __init__(self, contents='', parent=None, name=None):
         self.contents = contents
         self.parent = parent
+        self.name = name
 
 class InMemoryDir(InMemoryNode):
     """
     Stores dictionary of child directories/files and reference to parent.
     """
-    def __init__(self, dirs=None, files=None, parent=None):
+    def __init__(self, dirs=None, files=None, parent=None, name=None):
         self.children = {}
         self.parent = parent
+        self.name = name
 
     def resolve(self, path, create=False):
         path_bits = path.strip('/').split('/', 1)
@@ -41,14 +54,15 @@ class InMemoryDir(InMemoryNode):
                 return self.children[current]
             if not create:
                 raise PathDoesNotExist()
-            node = InMemoryFile()
+            node = InMemoryFile(name=current)
             self.add_child(current, node)
             return node
         if current in self.children.keys():
             return self.children[current].resolve(rest, create=create)
         if not create:
             raise PathDoesNotExist()
-        node = InMemoryDir()
+        node = InMemoryDir(name=current)
+
         self.add_child(current, node)
         return self.children[current].resolve(rest, create)
 
@@ -87,6 +101,9 @@ class InMemoryDir(InMemoryNode):
         file.contents = content
         return path
 
+    def url(self, path):
+        return urlparse.urljoin(settings.MEDIA_URL, filepath_to_uri(self.resolve(path).path))
+
 class InMemoryStorage(Storage):
     """
     Django storage class for in-memory filesystem.
@@ -105,6 +122,9 @@ class InMemoryStorage(Storage):
 
     def size(self, name):
         return self.filesystem.size(name)
+
+    def url(self, name):
+        return self.filesystem.url(name)
 
     def _open(self, name, mode=None):
         return self.filesystem.open(name)
